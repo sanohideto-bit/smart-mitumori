@@ -55,6 +55,12 @@ function fmtDate(iso) {
   return iso.slice(0, 10);
 }
 
+// 施主名から末尾の敬称(様/さま/殿/御中)を除去して返す
+function cleanClientName(name) {
+  if (!name) return '';
+  return String(name).replace(/[\s　]*(様|さま|サマ|殿|御中)$/, '').trim();
+}
+
 // ============ 計算エンジン ============
 function computeScaleParams(input) {
   const t = parseFloat(input.tsuboFloor) || 32;
@@ -177,34 +183,40 @@ function computeEstimate(project, masters) {
     return { ...item, quantity, autoQuantity, quantitySource, effectivePrice: priceInfo.price, priceSource: priceInfo.source, enabled, masterDisabled: !!item.disabled, amount };
   });
 
-  const customLines = (project.customItems || []).map(c => ({
-    no: c.no || ('*-' + (c.id || '').slice(-3)),
-    category: c.category || "本体工事",
-    categoryGroup: c.categoryGroup || "M",
-    categoryName: c.categoryName || "カスタム",
-    name: c.name || "(無題)",
-    spec: c.spec || "",
-    quantity: parseFloat(c.quantity) || 1,
-    autoQuantity: parseFloat(c.quantity) || 1,
-    quantitySource: 'custom',
-    unit: c.unit || "式",
-    effectivePrice: parseFloat(c.price) || 0,
-    priceSource: 'custom',
-    enabled: c.enabled !== false,
-    amount: (c.enabled !== false) ? Math.round((parseFloat(c.quantity) || 1) * (parseFloat(c.price) || 0)) : 0,
-    isCustom: true,
-    customId: c.id,
-    remark: c.remark || ""
-  }));
+  const customLines = (project.customItems || []).map(c => {
+    const qty = c.quantity === '' || c.quantity === null || c.quantity === undefined ? 0 : (parseFloat(c.quantity) || 0);
+    const price = c.price === '' || c.price === null || c.price === undefined ? 0 : (parseFloat(c.price) || 0);
+    return {
+      no: c.no || ('*-' + (c.id || '').slice(-3)),
+      category: c.category || "本体工事",
+      categoryGroup: c.categoryGroup || "M",
+      categoryName: c.categoryName || "カスタム",
+      name: c.name !== undefined && c.name !== null ? c.name : '',
+      spec: c.spec !== undefined && c.spec !== null ? c.spec : '',
+      quantity: qty,
+      autoQuantity: qty,
+      quantitySource: 'custom',
+      unit: c.unit !== undefined && c.unit !== null ? c.unit : '式',
+      effectivePrice: price,
+      priceSource: 'custom',
+      enabled: c.enabled !== false,
+      amount: (c.enabled !== false) ? Math.round(qty * price) : 0,
+      isCustom: true,
+      customId: c.id,
+      remark: c.remark || ""
+    };
+  });
 
   const allLines = [...lines, ...customLines];
 
-  // 表示用連番を付与: カテゴリ内で「マスタで無効化されていない項目」に1から振り直し
-  // (案件単位での無効化(excludedItems)はチェック対象に含めず、有効な項目のみ連番を振る)
+  // 表示用連番を付与
+  // - マスタで無効化された項目はカウントから除外（元の番号を保持、UIでは非表示）
+  // - 案件単位で無効化された(enabled=false)項目もカウントから除外
+  // - 有効な項目だけに連番を振る
   const displayCounters = {};
   allLines.forEach(l => {
-    if (l.masterDisabled) {
-      l.displayNo = l.no; // 表示しないので元の値のまま
+    if (l.masterDisabled || !l.enabled) {
+      l.displayNo = l.no; // 表示しない/番号ふらない、内部キーをそのまま使う
       return;
     }
     const g = l.categoryGroup;
@@ -546,7 +558,7 @@ function PropertyList({ projects, properties, masters, onOpen, onAddProperty, on
                   🏠 {prop.name}
                 </h4>
                 {prop.clientName && (
-                  <p className="text-xs text-slate-500 mt-1 truncate">{prop.clientName} 様</p>
+                  <p className="text-xs text-slate-500 mt-1 truncate">{cleanClientName(prop.clientName)} 様</p>
                 )}
                 <div className="mt-3 pt-3 border-t border-slate-100">
                   {prop.latestEstimate ? (
@@ -612,7 +624,7 @@ function ProjectList({ projects, masters, propertyFilter, onBack, onOpen, onAdd,
                   <h4 className="font-semibold text-slate-900 truncate">{p.name}</h4>
                   <p className="text-xs text-slate-500 mt-1 truncate">
                     {p.scale.tsuboFloor}坪・{p.scale.floorCount}階建
-                    {p.clientName && ` / ${p.clientName}様`}
+                    {p.clientName && ` / ${cleanClientName(p.clientName)}様`}
                   </p>
                   <div className="mt-3 pt-3 border-t border-slate-100">
                     <div className="text-xs text-slate-500">税込総額</div>
@@ -702,9 +714,9 @@ function ProjectEditor({ project, masters, companyInfo, onChange, onBack, onRefr
         </div>
         <div className="flex flex-wrap gap-3 mt-3 text-sm">
           <label className="flex items-center gap-2 flex-1 min-w-fit">
-            <span className="text-slate-600 whitespace-nowrap">施主</span>
+            <span className="text-slate-600 whitespace-nowrap">施主名</span>
             <input type="text" value={project.clientName || ''} onChange={e => onChange(p => ({ ...p, clientName: e.target.value }))}
-              className="border border-slate-300 bg-slate-50 hover:bg-white focus:bg-white focus:border-blue-500 focus:outline-none rounded px-2 py-1 flex-1 min-w-0" placeholder="○○ 様" />
+              className="border border-slate-300 bg-slate-50 hover:bg-white focus:bg-white focus:border-blue-500 focus:outline-none rounded px-2 py-1 flex-1 min-w-0" placeholder="例: 山田太郎(敬称不要)" />
           </label>
           <label className="flex items-center gap-2 flex-1 min-w-fit">
             <span className="text-slate-600 whitespace-nowrap">現場</span>
@@ -1009,6 +1021,16 @@ function TabDetails({ project, onChange, result }) {
       return { ...p, manualQuantities: mq };
     });
   };
+  // この見積限定で、内訳名・規格を編集 (スナップショットを書き換え)
+  const editSnapshotField = (no, key, val) => {
+    onChange(p => {
+      const snapshot = p.rateMasterSnapshot || [];
+      const newSnapshot = snapshot.map(item =>
+        item.no === no ? { ...item, [key]: val } : item
+      );
+      return { ...p, rateMasterSnapshot: newSnapshot };
+    });
+  };
   const addCustom = (categoryGroup) => {
     const groupInfo = result.lines.find(l => l.categoryGroup === categoryGroup);
     // 同カテゴリ内の最大番号を探して+1
@@ -1096,19 +1118,31 @@ function TabDetails({ project, onChange, result }) {
               {/* テーブル */}
               {!isCollapsed && (
                 <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
+                  <table className="w-full text-xs" style={{tableLayout: 'fixed'}}>
+                    <colgroup>
+                      <col style={{width:'32px'}} />
+                      <col style={{width:'56px'}} />
+                      <col style={{width:'180px'}} />
+                      <col />
+                      <col style={{width:'80px'}} />
+                      <col style={{width:'56px'}} />
+                      <col style={{width:'128px'}} />
+                      <col style={{width:'112px'}} />
+                      <col style={{width:'128px'}} />
+                      <col style={{width:'32px'}} />
+                    </colgroup>
                     <thead className="bg-slate-100 text-slate-600">
                       <tr>
-                        <th className="px-2 py-1.5 text-center w-8">使</th>
-                        <th className="px-2 py-1.5 text-left w-14">No.</th>
-                        <th className="px-2 py-1.5 text-left min-w-32">内訳名</th>
+                        <th className="px-2 py-1.5 text-center">使</th>
+                        <th className="px-2 py-1.5 text-left">No.</th>
+                        <th className="px-2 py-1.5 text-left">内訳名</th>
                         <th className="px-2 py-1.5 text-left">規格・仕様</th>
-                        <th className="px-2 py-1.5 text-right w-20">数量</th>
-                        <th className="px-2 py-1.5 text-left w-14">単位</th>
-                        <th className="px-2 py-1.5 text-right w-32">単価</th>
-                        <th className="px-2 py-1.5 text-right w-28">金額</th>
-                        <th className="px-2 py-1.5 text-left w-32">数量式</th>
-                        <th className="px-2 py-1.5 w-8"></th>
+                        <th className="px-2 py-1.5 text-right">数量</th>
+                        <th className="px-2 py-1.5 text-left">単位</th>
+                        <th className="px-2 py-1.5 text-right">単価</th>
+                        <th className="px-2 py-1.5 text-right">金額</th>
+                        <th className="px-2 py-1.5 text-left">数量式</th>
+                        <th className="px-2 py-1.5"></th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -1131,26 +1165,30 @@ function TabDetails({ project, onChange, result }) {
                             </td>
                             <td className="px-2 py-1.5">
                               {isCustom ? (
-                                <input type="text" value={l.name}
+                                <input type="text" value={l.name || ''}
                                   onChange={e => updateCustom(l.customId, 'name', e.target.value)}
                                   className={editableCell + " w-full bg-pink-50"} />
                               ) : (
-                                <span>{l.name}</span>
+                                <input type="text" value={l.name || ''}
+                                  onChange={e => editSnapshotField(l.no, 'name', e.target.value)}
+                                  className={editableCell + " w-full"} />
                               )}
                             </td>
                             <td className="px-2 py-1.5 text-slate-500">
                               {isCustom ? (
-                                <input type="text" value={l.spec}
+                                <input type="text" value={l.spec || ''}
                                   onChange={e => updateCustom(l.customId, 'spec', e.target.value)}
                                   className={editableCell + " w-full bg-pink-50"} />
                               ) : (
-                                <span className="block truncate max-w-xs" title={l.spec}>{l.spec}</span>
+                                <input type="text" value={l.spec || ''}
+                                  onChange={e => editSnapshotField(l.no, 'spec', e.target.value)}
+                                  className={editableCell + " w-full"} />
                               )}
                             </td>
                             <td className="px-2 py-1.5 text-right">
                               {isCustom ? (
                                 <input type="number" value={l.quantity}
-                                  onChange={e => updateCustom(l.customId, 'quantity', parseFloat(e.target.value) || 0)}
+                                  onChange={e => updateCustom(l.customId, 'quantity', e.target.value)}
                                   className={editableCellNum + " w-20 bg-pink-50"} />
                               ) : (
                                 <div className="flex items-center gap-1 justify-end">
@@ -1177,7 +1215,7 @@ function TabDetails({ project, onChange, result }) {
                             <td className="px-2 py-1.5 text-right">
                               {isCustom ? (
                                 <input type="number" value={l.effectivePrice}
-                                  onChange={e => updateCustom(l.customId, 'price', parseFloat(e.target.value) || 0)}
+                                  onChange={e => updateCustom(l.customId, 'price', e.target.value)}
                                   className={editableCellNum + " w-24 bg-pink-50 text-pink-700"} />
                               ) : (
                                 <div className="flex items-center gap-1 justify-end">
@@ -1233,34 +1271,64 @@ function TabDetails({ project, onChange, result }) {
 }
 
 function TabResult({ project, result, companyInfo }) {
+  // カテゴリ別合計を集計、本体/付帯/諸経費で分類
   const byGroup = {};
   result.lines.forEach(l => {
     if (!byGroup[l.categoryGroup]) byGroup[l.categoryGroup] = { name: l.categoryName, category: l.category, total: 0 };
     byGroup[l.categoryGroup].total += l.amount;
   });
 
+  // 区分ごとに分類 + 0円カテゴリを除外
+  const body = [];
+  const side = [];
+  const overhead = [];
+  Object.entries(byGroup).forEach(([g, info]) => {
+    if (info.total <= 0) return; // 0円カテゴリは非表示
+    const entry = { ...info, group: g };
+    if (info.category === '本体工事') body.push(entry);
+    else if (info.category === '付帯工事') side.push(entry);
+    else if (info.category === '諸経費') overhead.push(entry);
+  });
+
+  const renderSection = (title, items, sectionTotal, colorClass) => {
+    if (items.length === 0 && sectionTotal === 0) return null;
+    return (
+      <div className="mb-4">
+        <div className={`text-xs font-bold px-2 py-1 rounded mb-1 ${colorClass}`}>{title}</div>
+        <div className="space-y-0.5">
+          {items.map(info => (
+            <div key={info.group} className="grid grid-cols-[3rem_1fr_auto] items-center py-1 text-xs sm:text-sm">
+              <span className="text-slate-500 font-mono">{info.group}.</span>
+              <span className="text-slate-700 truncate">{info.name}</span>
+              <span className="num font-mono">{fmt(info.total)}</span>
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-2 font-bold mt-1 pt-1 border-t border-slate-200 text-sm">
+          <span>{title} 計</span>
+          <span className="text-right num font-mono">{fmt(sectionTotal)}</span>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2 bg-white border border-slate-200 rounded-lg p-5">
           <h4 className="text-sm font-bold text-slate-900 mb-3">カテゴリ別小計</h4>
-          <div className="space-y-1 text-sm">
-            {Object.entries(byGroup).map(([g, info]) => (
-              <div key={g} className="grid grid-cols-[3rem_1fr_auto] items-center py-1 text-xs sm:text-sm">
-                <span className="text-slate-500 font-mono">{g}.</span>
-                <span className="text-slate-700 truncate">{info.name}</span>
-                <span className="num font-mono">{fmt(info.total)}</span>
+          {renderSection('本体工事', body, result.bodyTotal, 'bg-blue-100 text-blue-900')}
+          {renderSection('付帯工事', side, result.sideTotal, 'bg-amber-100 text-amber-900')}
+          {renderSection('諸経費', overhead, result.overheadTotal, 'bg-green-100 text-green-900')}
+          {result.optionsTotal > 0 && (
+            <div className="mb-4">
+              <div className="text-xs font-bold px-2 py-1 rounded mb-1 bg-orange-100 text-orange-900">オプション工事</div>
+              <div className="grid grid-cols-2 font-bold mt-1 pt-1 border-t border-slate-200 text-sm text-orange-700">
+                <span>オプション工事 計</span>
+                <span className="text-right num font-mono">{fmt(result.optionsTotal)}</span>
               </div>
-            ))}
-            <div className="border-t border-slate-300 mt-2 pt-2 space-y-1">
-              <div className="grid grid-cols-2 font-bold"><span>本体工事計</span><span className="text-right num font-mono">{fmt(result.bodyTotal)}</span></div>
-              <div className="grid grid-cols-2 font-bold"><span>付帯工事計</span><span className="text-right num font-mono">{fmt(result.sideTotal)}</span></div>
-              <div className="grid grid-cols-2 font-bold"><span>諸経費計</span><span className="text-right num font-mono">{fmt(result.overheadTotal)}</span></div>
-              {result.optionsTotal > 0 && (
-                <div className="grid grid-cols-2 font-bold text-orange-700"><span>オプション工事</span><span className="text-right num font-mono">{fmt(result.optionsTotal)}</span></div>
-              )}
             </div>
-          </div>
+          )}
         </div>
         <div className="bg-slate-900 text-white rounded-lg p-5 flex flex-col justify-between">
           <div>
@@ -1330,7 +1398,7 @@ function FormatStandard({ project, result, companyInfo, byGroup }) {
       </div>
       <div className="grid grid-cols-2 gap-8 mb-8">
         <div>
-          <div className="text-lg font-bold border-b border-slate-400 pb-2">{project.clientName ? `${project.clientName} 様` : '○○○○ 様'}</div>
+          <div className="text-lg font-bold border-b border-slate-400 pb-2">{project.clientName ? `${cleanClientName(project.clientName)} 様` : '○○○○ 様'}</div>
           <div className="text-sm text-slate-600 mt-3">
             <div>工事名: {project.name}</div>
             {project.siteAddress && <div>現場: {project.siteAddress}</div>}
@@ -1384,7 +1452,7 @@ function FormatDetailed({ project, result, companyInfo, byGroup }) {
       </div>
       <div className="grid grid-cols-2 gap-8 mb-6">
         <div>
-          <div className="text-lg font-bold border-b border-slate-400 pb-2">{project.clientName ? `${project.clientName} 様` : '○○○○ 様'}</div>
+          <div className="text-lg font-bold border-b border-slate-400 pb-2">{project.clientName ? `${cleanClientName(project.clientName)} 様` : '○○○○ 様'}</div>
           <div className="text-sm text-slate-600 mt-3">
             <div>工事名: {project.name}</div>
             {project.siteAddress && <div>現場: {project.siteAddress}</div>}
@@ -1469,7 +1537,7 @@ function FormatFormal({ project, result, companyInfo, byGroup }) {
       </div>
       <div className="grid grid-cols-[1fr_auto] gap-8 mb-6">
         <div className="border border-slate-400 p-4">
-          <div className="text-base font-bold mb-3">{project.clientName ? `${project.clientName}` : '○○○○'} <span className="text-sm">様</span></div>
+          <div className="text-base font-bold mb-3">{project.clientName ? cleanClientName(project.clientName) : '○○○○'} <span className="text-sm">様</span></div>
           <table className="w-full text-sm">
             <tbody>
               <tr className="border-t border-slate-200"><td className="py-1.5 text-slate-600 w-24">件名</td><td className="py-1.5">{project.name}</td></tr>
